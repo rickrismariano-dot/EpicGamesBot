@@ -10,7 +10,7 @@ DRY_RUN = os.environ.get("DRY_RUN", "").lower() in ("1", "true", "yes")
 
 # Optional: paste a Discord role ID between the quotes to ping that role.
 # Leave it as "" for no ping.
-ROLE_ID = ""
+ROLE_ID = "1555989818314326056"
 
 GREEN = 0x2ECC71
 BLUE = 0x3498DB
