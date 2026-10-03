@@ -1,11 +1,19 @@
 """Posts this week's free Epic Games Store games to a Discord webhook."""
 import os
 import sys
+from datetime import datetime
 import requests
 
 API = "https://store-site-backend-static.ak.epicgames.com/freeGamesPromotions"
 WEBHOOK = os.environ.get("DISCORD_WEBHOOK_URL")
 DRY_RUN = os.environ.get("DRY_RUN", "").lower() in ("1", "true", "yes")
+
+# Optional: paste a Discord role ID between the quotes to ping that role.
+# Leave it as "" for no ping.
+ROLE_ID = ""
+
+GREEN = 0x2ECC71
+BLUE = 0x3498DB
 
 
 def is_free(offer):
@@ -48,17 +56,23 @@ def get_slug(game):
     return game.get("productSlug") or game.get("urlSlug")
 
 
-def make_embed(game, date_str, label):
+def to_unix(iso):
+    # Epic format: 2026-10-08T15:00:00.000Z
+    return int(datetime.fromisoformat(iso.replace("Z", "+00:00")).timestamp())
+
+
+def make_embed(game, date_str, label, color):
     slug = get_slug(game)
     image = next(
         (i["url"] for i in game.get("keyImages", [])
          if i["type"] in ("OfferImageWide", "Thumbnail")),
         None,
     )
+    ts = to_unix(date_str)
     embed = {
         "title": game["title"],
-        "description": f"{label} <t:{to_unix(date_str)}:F> (<t:{to_unix(date_str)}:R>)",
-        "color": 0x2F2F2F,
+        "description": f"{label} <t:{ts}:F> (<t:{ts}:R>)",
+        "color": color,
     }
     if slug:
         embed["url"] = f"https://store.epicgames.com/en-US/p/{slug}"
@@ -67,39 +81,42 @@ def make_embed(game, date_str, label):
     return embed
 
 
-def to_unix(iso):
-    from datetime import datetime
-    # Epic format: 2026-10-08T15:00:00.000Z
-    return int(datetime.fromisoformat(iso.replace("Z", "+00:00")).timestamp())
+def send(payload):
+    if DRY_RUN or not WEBHOOK:
+        print("DRY RUN, would post:", payload["content"])
+        for e in payload["embeds"]:
+            print("-", e["title"], "|", e["description"])
+        return
+    requests.post(WEBHOOK, json=payload, timeout=15).raise_for_status()
+    print("Posted:", payload["content"])
 
 
 def main():
     current, upcoming = get_games()
 
-    # De-duplicate, and keep upcoming separate from current
+    # Keep upcoming separate from current, no duplicates
     seen = {g["title"] for g, _ in current}
     upcoming = [(g, d) for g, d in upcoming if g["title"] not in seen]
 
-    embeds = [make_embed(g, d, "Free until") for g, d in current]
-    embeds += [make_embed(g, d, "Free starting") for g, d in upcoming]
-
-    if not embeds:
+    if not current and not upcoming:
         print("No free games found, nothing to post.")
         return
 
-    payload = {
-        "content": "**Epic Games Store: free games this week**",
-        "embeds": embeds[:10],  # Discord limit is 10 embeds per message
-    }
+    if current:
+        ping = f"<@&{ROLE_ID}> " if ROLE_ID else ""
+        payload = {
+            "content": f"{ping}**Free now on the Epic Games Store**",
+            "embeds": [make_embed(g, d, "Free until", GREEN) for g, d in current][:10],
+        }
+        if ROLE_ID:
+            payload["allowed_mentions"] = {"roles": [ROLE_ID]}
+        send(payload)
 
-    if DRY_RUN or not WEBHOOK:
-        print("DRY RUN, would post:")
-        for e in embeds:
-            print("-", e["title"], "|", e["description"])
-        return
-
-    requests.post(WEBHOOK, json=payload, timeout=15).raise_for_status()
-    print(f"Posted {len(embeds)} game(s).")
+    if upcoming:
+        send({
+            "content": "**Coming next week**",
+            "embeds": [make_embed(g, d, "Free starting", BLUE) for g, d in upcoming][:10],
+        })
 
 
 if __name__ == "__main__":
@@ -107,4 +124,4 @@ if __name__ == "__main__":
         main()
     except Exception as exc:
         print(f"Error: {exc}", file=sys.stderr)
-        sys.exit(1)  # non-zero exit makes the workflow fail and GitHub emails you
+        sys.exit(1)  # non-zero exit makes the workflow fail so GitHub emails you
